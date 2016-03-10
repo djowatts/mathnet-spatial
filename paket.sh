@@ -27,5 +27,4 @@ then
 fi
 
 run .paket/paket.bootstrapper.exe
-run .paket/paket.exe restore
-run packages/build/FAKE/tools/FAKE.exe "$@" $FSIARGS build.fsx
+run .paket/paket.exe "$@"

@@ -15,14 +15,15 @@
 // PRELUDE
 // --------------------------------------------------------------------------------------
 
-#I "packages/FAKE/tools"
-#r "packages/FAKE/tools/FakeLib.dll"
+#I "packages/build/FAKE/tools"
+#r "packages/build/FAKE/tools/FakeLib.dll"
 
 open Fake
 open Fake.DocuHelper
 open Fake.AssemblyInfoFile
 open Fake.ReleaseNotesHelper
 open Fake.StringHelper
+open Fake.Testing.NUnit3
 open System
 open System.IO
 
@@ -158,15 +159,14 @@ Target "Build" DoNothing
 // --------------------------------------------------------------------------------------
 
 let test target =
-    let quick p = if hasBuildParam "quick" then { p with ExcludeCategory="LongRunning" } else p
-    NUnit (fun p ->
+    let quick p = if hasBuildParam "quick" then { p with Where="!~LongRunning" } else p
+    NUnit3 (fun p ->
         { p with
-            DisableShadowCopy = true
-            TimeOut = TimeSpan.FromMinutes 30.
-            OutputFile = "TestResults.xml" } |> quick) target
+            ShadowCopy = false
+            TimeOut = TimeSpan.FromMinutes 30. } |> quick) target
 
 Target "Test" (fun _ -> test !! "out/test/**/*UnitTests*.dll")
-"Build" ==> "Test"
+"Build" ?=> "Test"
 
 
 // --------------------------------------------------------------------------------------
@@ -217,13 +217,13 @@ let zip zipDir filesDir filesFilter bundle =
 Target "Zip" (fun _ ->
     CleanDir "out/packages/Zip"
     coreBundle |> zip "out/packages/Zip" "out/lib" (fun f -> f.Contains("MathNet.Spatial.") || f.Contains("MathNet.Numerics.")))
-"Build" ==> "Zip"
+"Build" ?=> "Zip"
 
 
 // NUGET
 
 let updateNuspec (pack:Package) outPath symbols updateFiles spec =
-    { spec with ToolPath = "packages/NuGet.CommandLine/tools/NuGet.exe"
+    { spec with ToolPath = "packages/build/NuGet.CommandLine/tools/NuGet.exe"
                 OutputPath = outPath
                 WorkingDir = "obj/NuGet"
                 Version = pack.Version
@@ -266,7 +266,7 @@ Target "NuGet" (fun _ ->
     CleanDir "out/packages/NuGet"
     if hasBuildParam "all" || hasBuildParam "release" then
         nugetPack coreBundle "out/packages/NuGet")
-"Build" ==> "NuGet"
+"Build" ?=> "NuGet"
 
 
 // --------------------------------------------------------------------------------------
@@ -324,7 +324,8 @@ Target "DocsWatch" (fun _ ->
     watcher.EnableRaisingEvents <- false
     watcher.Dispose())
 
-"Build" ==> "CleanDocs" ==> "Docs"
+"CleanDocs" ==> "Docs"
+"Build" ?=> "CleanDocs"
 
 "Start"
   =?> ("CleanDocs", not (hasBuildParam "incremental"))
@@ -345,7 +346,8 @@ Target "Api" (fun _ ->
             TimeOut = TimeSpan.FromMinutes 10.
             OutputPath = "out/api/" }))
 
-"Build" ==> "CleanApi" ==> "Api"
+"CleanApi" ==> "Api"
+"Build" ?=> "CleanApi"
 
 
 // --------------------------------------------------------------------------------------
@@ -391,7 +393,7 @@ let publishNuGet packageFiles =
             let args = sprintf "push \"%s\"" (FullName file)
             let result =
                 ExecProcess (fun info ->
-                    info.FileName <- "packages/NuGet.CommandLine/tools/NuGet.exe"
+                    info.FileName <- "packages/build/NuGet.CommandLine/tools/NuGet.exe"
                     info.WorkingDirectory <- FullName "obj/NuGet"
                     info.Arguments <- args) (TimeSpan.FromMinutes 10.)
             if result <> 0 then failwith "Error during NuGet push."
@@ -407,6 +409,42 @@ Target "Publish" DoNothing
 "PublishNuGet" ==> "Publish"
 "PublishDocs" ==> "Publish"
 "PublishApi" ==> "Publish"
+
+
+// --------------------------------------------------------------------------------------
+// ENVIRONMENT DEPENDENCIES
+// --------------------------------------------------------------------------------------
+
+match buildServer with
+
+| AppVeyor ->
+    trace "AppVeyor Continuous Integration Build"
+    // In AppVeyor we let its engine managed task dependencies
+    // an let it call into this script multiple times, incrementally.
+
+    // build --> test: do not enforce
+    // build --> package: do not enforce
+    // build --> docs: do not enforce
+    ()
+
+| _ ->
+    trace "Normal Build"
+    // In normal builds we need to set up proper dependencies between
+    // the targets so FAKE can build up and order the full work-flow properly
+
+    // build --> test
+    "Build" ==> "Test" |> ignore
+
+    // build --> package
+    "Build" ==> "Zip" |> ignore
+    "Build" ==> "NuGet" |> ignore
+
+    // build --> docs
+    "Build" ==> "CleanDocs" |> ignore
+    "Build" ==> "Docs" |> ignore
+    "Build" ==> "CleanApi" |> ignore
+    "Build" ==> "Api" |> ignore
+    ()
 
 
 // --------------------------------------------------------------------------------------
